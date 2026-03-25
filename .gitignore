@@ -1,9 +1,47 @@
-.Rproj.user
+# -----------------------------
+# R / RStudio
+# -----------------------------
+.Rproj.user/
 .Rhistory
 .RData
 .Ruserdata
+
+# -----------------------------
+# OS files (Mac)
+# -----------------------------
 .DS_Store
 
+# -----------------------------
+# renv (keep lock, ignore library)
+# -----------------------------
 renv/library/
 
+# -----------------------------
+# Temporary Excel files
+# -----------------------------
+~$*.xlsx
+
+# -----------------------------
+# Sensitive files (VERY IMPORTANT)
+# -----------------------------
+*PRIVATE*
+*SubjectID*
+
+# -----------------------------
+# Data files (optional - adjust if needed)
+# -----------------------------
+# Uncomment below if you DON'T want to track data
+# *.csv
+# *.xlsx
+# *.rds
+# *.RDS
+
+# -----------------------------
+# Generated outputs
+# -----------------------------
 data/*.png
+
+# -----------------------------
+# Logs / misc
+# -----------------------------
+*.log
