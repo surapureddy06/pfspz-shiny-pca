@@ -1,0 +1,474 @@
+---
+title: "Delta Analysis Using Updated Phenodata and z_matched"
+author: "Sathya"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    theme: cerulean
+    toc: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = TRUE, message = TRUE)
+```
+
+```{r}
+library(here)
+library(Biobase)
+library(EDASeq)
+library(edgeR)
+library(limma)
+library(variancePartition)
+library(BiocParallel)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(data.table)
+library(writexl)
+library(EnsDb.Hsapiens.v86)
+```
+```{r}
+getwd()
+
+```
+```{r}
+list.files("data")
+
+```
+
+
+
+```{r}
+pdata <- readRDS("/Users/sathya/Human Pfspz/data/phenodata_clean_updated.rds")
+z <- readRDS("/Users/sathya/Human Pfspz/data/z_matched_clean.rds")
+
+class(pdata)
+class(z)
+
+dim(pdata)
+dim(counts(z))
+dim(pData(z))
+```
+
+```{r}
+colnames(pdata)
+colnames(pData(z))
+head(sampleNames(z))
+```
+
+```{r}
+# Step 4: Align updated phenodata with z_matched
+
+if (!"filenames" %in% colnames(pdata)) {
+  stop("The file phenodata_clean_updated.rds does not contain a 'filenames' column.")
+}
+
+pdata$filenames <- as.character(pdata$filenames)
+
+pdata_matched <- pdata %>%
+  dplyr::filter(filenames %in% sampleNames(z))
+
+pdata_matched <- pdata_matched[match(sampleNames(z), pdata_matched$filenames), ]
+
+stopifnot(all(sampleNames(z) == pdata_matched$filenames))
+
+dim(pdata_matched)
+head(pdata_matched$filenames)
+head(sampleNames(z))
+```
+```{r}
+# Step 5: Replace metadata correctly (FIXED)
+
+pData(z) <- pdata_matched
+
+# Check
+dim(pData(z))
+head(pData(z))
+```
+```{r}
+annotations_ensdb <- AnnotationDbi::select(
+  EnsDb.Hsapiens.v86,
+  keys = rownames(z),
+  keytype = "GENEID",
+  columns = c("SYMBOL", "GENESEQSTART", "GENESEQEND")
+)
+
+gene_annotation <- annotations_ensdb[annotations_ensdb$GENEID %in% rownames(z), ]
+
+gene_annotation <- gene_annotation[!duplicated(gene_annotation$GENEID), ]
+rownames(gene_annotation) <- gene_annotation$GENEID
+
+dim(gene_annotation)
+head(gene_annotation)
+
+
+```
+```{r}
+z <- z[rownames(z) %in% rownames(gene_annotation), ]
+gene_annotation <- gene_annotation[rownames(z), ]
+
+stopifnot(all(rownames(z) == rownames(gene_annotation)))
+
+fData(z) <- gene_annotation
+
+dim(z)
+head(fData(z))
+```
+
+```{r}
+# Step 8: Clean metadata variables for modeling
+
+pd <- as.data.frame(pData(z))
+
+colnames(pd)
+
+# --------------------------
+# timepoint_new
+# --------------------------
+pd$timepoint_new <- dplyr::case_when(
+  pd$timepoint_wrtVAX %in% c("VAX1", "V1_d0") ~ "V1_d0",
+  pd$timepoint_wrtVAX %in% c("VAX1+2 days", "VAX1+ 2 days", "V1_d2") ~ "V1_d2",
+  pd$timepoint_wrtVAX %in% c("VAX2", "V2_d0") ~ "V2_d0",
+  pd$timepoint_wrtVAX %in% c("VAX2+2 days", "VAX2+ 2 days", "V2_d2") ~ "V2_d2",
+  pd$timepoint_wrtVAX %in% c("VAX3", "V3_d0") ~ "V3_d0",
+  pd$timepoint_wrtVAX %in% c("VAX3+2 days", "VAX3+ 2 days", "V3_d2") ~ "V3_d2",
+  pd$timepoint_wrtVAX %in% c("VAX3+7 days", "VAX3+ 7 days", "V3_d7") ~ "V3_d7",
+  pd$timepoint_wrtVAX %in% c("CHMI_D1", "zCHMI_d1", "CHMI_d1") ~ "CHMI_d1",
+  pd$timepoint_wrtVAX %in% c("CHMI+2 days", "CHMI_D3", "zCHMI_d2", "CHMI_d2") ~ "CHMI_d2",
+  TRUE ~ as.character(pd$timepoint_wrtVAX)
+)
+
+# --------------------------
+# outcome
+# --------------------------
+if ("outcome" %in% colnames(pd)) {
+  raw_outcome <- as.character(pd$outcome)
+} else if ("Outcome" %in% colnames(pd)) {
+  raw_outcome <- as.character(pd$Outcome)
+} else {
+  stop("Neither 'outcome' nor 'Outcome' exists in pData(z).")
+}
+
+pd$outcome <- dplyr::case_when(
+  raw_outcome %in% c("Protected", "protected") ~ "protected",
+  raw_outcome %in% c("Not protected", "not_protected", "Non-Protected") ~ "not_protected",
+  TRUE ~ raw_outcome
+)
+
+# --------------------------
+# sex
+# --------------------------
+if ("sex" %in% colnames(pd)) {
+  raw_sex <- as.character(pd$sex)
+} else if ("Sex" %in% colnames(pd)) {
+  raw_sex <- as.character(pd$Sex)
+} else {
+  stop("Neither 'sex' nor 'Sex' exists in pData(z).")
+}
+
+pd$sex <- dplyr::case_when(
+  raw_sex %in% c("M", "Male", "male") ~ "Male",
+  raw_sex %in% c("F", "Female", "female") ~ "Female",
+  TRUE ~ raw_sex
+)
+
+# --------------------------
+# subjid
+# --------------------------
+if ("subjid" %in% colnames(pd)) {
+  pd$subjid <- as.character(pd$subjid)
+} else if ("Subject.ID" %in% colnames(pd)) {
+  pd$subjid <- as.character(pd$Subject.ID)
+} else {
+  stop("Neither 'subjid' nor 'Subject.ID' exists in pData(z).")
+}
+
+# --------------------------
+# age_years
+# --------------------------
+if ("age_years" %in% colnames(pd)) {
+  pd$age_years <- suppressWarnings(as.numeric(pd$age_years))
+} else if ("Age..years." %in% colnames(pd)) {
+  pd$age_years <- suppressWarnings(as.numeric(pd$Age..years.))
+} else {
+  stop("Neither 'age_years' nor 'Age..years.' exists in pData(z).")
+}
+
+# --------------------------
+# notes
+# --------------------------
+if ("notes" %in% colnames(pd)) {
+  pd$notes <- ifelse(is.na(pd$notes), "not placebo", as.character(pd$notes))
+} else if ("Notes" %in% colnames(pd)) {
+  pd$notes <- ifelse(is.na(pd$Notes), "not placebo", as.character(pd$Notes))
+} else {
+  pd$notes <- "not placebo"
+}
+
+# --------------------------
+# study
+# --------------------------
+if ("study" %in% colnames(pd)) {
+  pd$study <- as.character(pd$study)
+} else if ("TX.Group" %in% colnames(pd)) {
+  pd$study <- ifelse(pd$TX.Group == "5-day interval", "5d_interval", "7d_interval")
+} else {
+  stop("Neither 'study' nor 'TX.Group' exists in pData(z).")
+}
+
+# assign back
+pData(z) <- pd
+
+# checks
+colnames(pData(z))
+table(pData(z)$timepoint_new, useNA = "ifany")
+table(pData(z)$outcome, useNA = "ifany")
+table(pData(z)$sex, useNA = "ifany")
+table(pData(z)$notes, useNA = "ifany")
+table(pData(z)$study, useNA = "ifany")
+```
+```{r}
+table(pData(z)$timepoint_new, useNA = "ifany")
+table(pData(z)$outcome, useNA = "ifany")
+table(pData(z)$sex, useNA = "ifany")
+table(pData(z)$study, useNA = "ifany")
+table(pData(z)$notes, useNA = "ifany")
+```
+
+```{r}
+my_group <- factor(pData(z)$timepoint_new)
+
+a <- DGEList(
+  counts = counts(z),
+  genes = fData(z),
+  group = my_group,
+  samples = pData(z),
+  remove.zeros = TRUE
+)
+
+dim(a)
+head(a$samples)
+
+```
+```{r}
+keep <- filterByExpr(
+  a,
+  group = a$samples$group,
+  min.count = 10,
+  min.total.count = 15,
+  large.n = 10,
+  min.prop = 0.7
+)
+
+dim(a)
+a <- a[keep, , keep.lib.sizes = FALSE]
+dim(a)
+
+a <- normLibSizes(a, method = "TMM")
+
+```
+
+```{r}
+a_noplacebo <- a[, a$samples$notes != "placebo"]
+
+ncol(a_noplacebo)
+table(a_noplacebo$samples$outcome, useNA = "ifany")
+table(a_noplacebo$samples$timepoint_new, useNA = "ifany")
+```
+```{r}
+delta_timepoints <- c(
+  "V1_d0",
+  "V1_d2",
+  "V2_d0",
+  "V2_d2",
+  "V3_d0",
+  "V3_d2",
+  "V3_d7",
+  "CHMI_d1",
+  "CHMI_d2"
+)
+
+a_noplacebo <- a_noplacebo[, a_noplacebo$samples$timepoint_new %in% delta_timepoints]
+a_noplacebo$samples$timepoint_new <- factor(a_noplacebo$samples$timepoint_new, levels = delta_timepoints)
+
+table(a_noplacebo$samples$timepoint_new, a_noplacebo$samples$outcome)
+```
+```{r}
+a_noplacebo$samples$timepoint_outcome <- ifelse(
+  a_noplacebo$samples$timepoint_new == "V1_d0",
+  "V1_d0",
+  paste(a_noplacebo$samples$timepoint_new, a_noplacebo$samples$outcome, sep = "_")
+)
+
+a_noplacebo$samples$timepoint_outcome <- factor(a_noplacebo$samples$timepoint_outcome)
+a_noplacebo$samples$sex <- factor(a_noplacebo$samples$sex)
+a_noplacebo$samples$study <- factor(a_noplacebo$samples$study)
+a_noplacebo$samples$subjid <- factor(a_noplacebo$samples$subjid)
+a_noplacebo$samples$age_years <- as.numeric(a_noplacebo$samples$age_years)
+
+table(a_noplacebo$samples$timepoint_outcome)
+levels(a_noplacebo$samples$timepoint_outcome)
+```
+```{r}
+vars_needed <- c("timepoint_outcome", "sex", "age_years", "study", "subjid")
+
+keep_complete <- complete.cases(a_noplacebo$samples[, vars_needed])
+
+a_noplacebo <- a_noplacebo[, keep_complete]
+a_noplacebo$samples <- droplevels(a_noplacebo$samples)
+
+dim(a_noplacebo)
+table(a_noplacebo$samples$timepoint_outcome)
+
+```
+```{r}
+nCores <- parallel::detectCores()
+param <- SnowParam(workers = max(1, nCores - 2), type = "SOCK", progressbar = TRUE)
+
+param
+
+```
+```{r}
+form <- ~ 0 + timepoint_outcome + sex + age_years + study + (1|subjid)
+
+all.vars(form)
+colnames(a_noplacebo$samples)
+setdiff(all.vars(form), colnames(a_noplacebo$samples))
+
+```
+```{r}
+vobjDream <- voomWithDreamWeights(
+  counts = a_noplacebo,
+  formula = form,
+  data = a_noplacebo$samples,
+  BPPARAM = param
+)
+
+
+```
+
+
+```{r}
+all_levels <- levels(a_noplacebo$samples$timepoint_outcome)
+
+post_levels <- setdiff(all_levels, "V1_d0")
+
+contrast_strings <- c()
+
+for (lev in post_levels) {
+  contrast_strings[lev] <- paste0(
+    "timepoint_outcome", lev,
+    " - timepoint_outcomeV1_d0"
+  )
+}
+contrast_strings
+
+```
+```{r}
+L <- makeContrastsDream(
+  formula = form,
+  data = a_noplacebo$samples,
+  contrasts = contrast_strings
+)
+
+colnames(L)
+L[1:5, 1:min(5, ncol(L))]
+```
+
+
+```{r}
+fitmm <- dream(
+  exprObj = vobjDream,
+  formula = form,
+  data = a_noplacebo$samples,
+  L = L,
+  BPPARAM = param
+)
+
+saveRDS(fitmm, "delta_output/fitmm_delta_dream.rds")
+```
+```{r}
+outdir <- "/Users/sathya/Human Pfspz/data/delta_output"
+dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+
+saveRDS(fitmm, file.path(outdir, "fitmm_delta_dream.rds"))
+```
+
+```{r}
+class(fitmm)
+dim(fitmm$coefficients)
+colnames(fitmm$coefficients)
+```
+```{r}
+toptable_ls <- list()
+
+for (coef_name in colnames(L)) {
+  toptable_ls[[coef_name]] <- variancePartition::topTable(
+    fitmm,
+    coef = coef_name,
+    number = Inf
+  )
+}
+
+names(toptable_ls)
+
+```
+
+```{r}
+toptables <- data.table::rbindlist(toptable_ls, idcol = "comparison")
+
+toptables <- toptables %>%
+  dplyr::mutate(
+    outcome = dplyr::case_when(
+      grepl("_not_protected$", comparison) ~ "not_protected",
+      grepl("_protected$", comparison) ~ "protected",
+      TRUE ~ NA_character_
+    ),
+    timepoint = comparison %>%
+      gsub("_not_protected$", "", .) %>%
+      gsub("_protected$", "", .),
+    comparison_clean = paste0("delta_", outcome, "_", timepoint, "_vs_V1_d0")
+  ) %>%
+  dplyr::select(outcome, timepoint, comparison, comparison_clean, dplyr::everything())
+
+head(toptables)
+
+```
+```{r}
+toptabs_delta_protected <- toptable_ls[grepl("_protected$", names(toptable_ls)) & 
+                                         !grepl("_not_protected$", names(toptable_ls))]
+
+toptabs_delta_non_protected <- toptable_ls[grepl("_not_protected$", names(toptable_ls))]
+
+names(toptabs_delta_protected)
+names(toptabs_delta_non_protected)
+
+
+```
+
+```{r}
+writexl::write_xlsx(
+  toptables,
+  path = file.path(outdir, "delta_outcome_timepoint_all_results.xlsx")
+)
+
+saveRDS(
+  toptable_ls,
+  file = file.path(outdir, "delta_all_toptables.rds")
+)
+
+saveRDS(
+  toptabs_delta_protected,
+  file = file.path(outdir, "delta_protected_toptables.rds")
+)
+
+saveRDS(
+  toptabs_delta_non_protected,
+  file = file.path(outdir, "delta_non_protected_toptables.rds")
+)
+```
+
+```{r}
+list.files("/Users/sathya/Human Pfspz/data/delta_output")
+```
