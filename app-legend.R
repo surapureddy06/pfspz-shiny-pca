@@ -84,7 +84,7 @@ ui <- fluidPage(
     "))
   ),
   
-  titlePanel("Human PfSPZ CVac (VTEU-0042) — Study Design"),
+  titlePanel("Human PfSPZ CVac  — Study Design"),
   
   fluidRow(
     column(
@@ -93,7 +93,7 @@ ui <- fluidPage(
       div(
         class="img-wrap",
         
-        tags$img(src="study_design.png"),
+        tags$img(src="Modifiedcqstudydesign.png"),
         
         # --------------------
         # COHORT 1
@@ -110,7 +110,7 @@ ui <- fluidPage(
         
         hotspot("CHMI", "76%", "10%", "10%", "16%", defs$CHMI),
         
-        hotspot("PfCSP_Ab", "6%", "43%", "16%", "12%", defs$PfCSP_Ab),
+        hotspot("PfCSP_Ab", "2%", "36%", "13%", "8%", defs$PfCSP_Ab),
         
         # --------------------
         # COHORT 3
